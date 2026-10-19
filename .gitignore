@@ -1,0 +1,14 @@
+# Training artefacts: 53 MB of intermediate checkpoints and 22 MB of tensorboard logs.
+# Only the three policies the README refers to are tracked.
+models/*
+!models/*.txt
+!models/BEST_walk3d_bothknee_v5_33M.zip
+!models/warmstart_morph36.zip
+!models/LOTTERY_walk3d_morph_v2_35M.zip
+runs/
+
+__pycache__/
+*.pyc
+
+# MuJoCo state dump from a debugging session
+MJDATA.TXT
