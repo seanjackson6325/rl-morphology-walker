@@ -1,24 +1,14 @@
-"""Gymnasium environment for the morphology-randomized biped walker.
+"""Gymnasium environment for the 2D walker.
 
-This is where the physics rig (walker.creature) turns into an actual RL
-problem: a Markov Decision Process (S, A, P, r, gamma).
+This file turns the pymunk rig in walker.creature into a learning problem.
 
-  S (state/observation): proprioception (torso pose+velocity, joint angles
-    +velocities, foot contacts) PLUS the creature's own body parameters
-    (limb lengths, densities). Including the morphology in the observation
-    is what makes domain randomization work -- without it, the same
-    observation could demand different optimal actions depending on a body
-    the policy can't see, which is not a well-posed MDP at all.
+The observation holds the torso pose and speed, the joint angles and speeds, the
+foot contacts, and the body values. The body values are necessary. Without them
+the same observation can need two different actions on two different bodies, and
+the problem has no correct answer.
 
-  A (action): a target angular rate in [-1, 1] for each of the 4 motors
-    (hip_L, knee_L, hip_R, knee_R), scaled to MAX_MOTOR_RATE rad/s.
-
-  r (reward): dense, shaped reward -- forward velocity, minus a small
-    energy penalty, minus a torso-tilt penalty, plus a per-step "alive"
-    bonus, with a one-time penalty on falling.
-
-  gamma (discount factor): not set here -- that's a PPO hyperparameter
-    applied during training, not a property of the environment itself.
+The reward pays for forward speed and subtracts a small cost for control effort
+and for a large torso angle. An episode stops when the creature falls.
 """
 
 from __future__ import annotations
@@ -100,7 +90,7 @@ class CreatureWalkerEnv(gym.Env):
         self.creature = build_creature(self.space, morphology, origin_x=0.0, ground_y=0.0)
 
         # Let the body settle under gravity into a natural standing pose before
-        # the episode officially starts -- the spawn pose is a kinematic
+        # the episode officially starts. the spawn pose is a kinematic
         # idealization (all joints at 0), not necessarily a physical equilibrium.
         for _ in range(60):
             self.space.step(PHYSICS_DT)

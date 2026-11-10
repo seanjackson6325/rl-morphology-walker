@@ -1,25 +1,23 @@
-"""Extend the fixed-body walker's network to the 36-D morphology observation.
+"""Grows the trained network to the 36-value observation.
 
-Why surgery instead of retraining: adding the missing right-shin input changes the
-observation from 35-D to 36-D, so PPO.load() cannot resume the 40M-step walker directly.
-Rather than pay for that gait again, we widen the first layer by one column.
+The right shin was missing from the observation. Adding it takes the observation
+from 35 values to 36, and PPO.load() then refuses the old file. This script widens
+the first layer instead, so the 40 million training steps are not lost.
 
-Two things have to be handled, not just one:
+Two changes are necessary, not one:
 
-1. NEW INPUT (right shin, appended last). Initialise its column to ZERO so it contributes
-   nothing at first; the policy learns to use it during the randomised run.
+1. The new input column starts at zero. It has no effect at first, and the policy
+   learns to use it during training.
 
-2. RE-CENTRED RANGES -- the subtle one. The old policy trained on a FIXED body, so its
-   morphology inputs were the constant [0.5, 1.8, 0.0, 1.5556, 1.5556, 1.5556] and the
-   network effectively baked that constant into its behaviour. Under the new ranges the same
-   body normalises to all zeros, so simply copying the weights would silently change what the
-   network computes. We therefore fold the old constant contribution into the bias:
+2. The ranges moved. The old policy trained on a fixed body, so its body values
+   were the constant [0.5, 1.8, 0, 1.556, 1.556, 1.556]. The same body now scales
+   to all zeros. A copy of the weights would therefore change the output. The old
+   constant goes into the layer bias instead:
 
-       y = W_other x_other + W_morph m_old + b        (old)
-       y = W_other x_other + 0 . m_new     + b'       (new, with b' = b + W_morph m_old)
+       y = W_other x + W_body m_old + b      becomes
+       y = W_other x + 0            + b2     with b2 = b + W_body m_old
 
-   which is exactly equivalent on the fixed body, and morphology-blind elsewhere -- a clean
-   starting point that cannot silently inherit a wrong morphology response.
+   The result is the same output on the fixed body, and no body response at first.
 """
 
 from __future__ import annotations
@@ -69,12 +67,12 @@ new.policy.load_state_dict(out)
 new.save(DST)
 print(f"saved {DST}.zip  ({N_OBS_OLD}-D -> {N_OBS}-D observation)")
 
-# --- verify the surgery is behaviour-preserving on the FIXED body ---
+# Check that the new network gives the same actions on the fixed body.
 fixed = CreatureWalker3DEnv(randomize=False, render_mode=None, max_episode_steps=1000)
 obs_new, _ = fixed.reset()
 obs_old = np.concatenate([obs_new[:N_NON_MORPH], M_OLD.astype(np.float32)])
 a_old, _ = old.predict(obs_old, deterministic=True)
 a_new, _ = new.predict(obs_new, deterministic=True)
-print(f"max action difference on an identical fixed-body state: {np.abs(a_old - a_new).max():.2e}")
-print("(should be ~1e-7; anything larger means the fold is wrong)")
+print(f"largest action difference on the same state: {np.abs(a_old - a_new).max():.2e}")
+print("A value near 1e-7 is correct. A larger value means the bias is wrong.")
 fixed.close()

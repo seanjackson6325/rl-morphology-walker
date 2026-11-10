@@ -1,11 +1,8 @@
-"""Visual/headless sanity check for the 3D MJCF biped.
+"""Checks the 3D creature model.
 
-Build the fixed-morphology body, drop it under gravity with all actuators idle,
-and confirm it compiles, stands (or settles) without exploding or sinking
-through the floor. Pass --view to open the interactive MuJoCo viewer.
-
-This is the 3D analogue of sanity_check.py -- physics/geometry validation
-BEFORE any RL, so we don't burn training time on a broken model.
+Builds the fixed body, drops it under gravity and leaves the actuators idle. The
+model must compile, stay together and stay above the floor. Use --view to open
+the viewer. This runs before any training, so a broken model costs no train time.
 """
 
 from __future__ import annotations

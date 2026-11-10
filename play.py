@@ -1,9 +1,8 @@
-"""Load a trained PPO model and watch it control the creature.
+"""Loads a trained policy and shows it in the viewer.
 
-deterministic=True makes the policy take the *mean* of its Gaussian action
-distribution instead of sampling from it. Sampling noise is only useful
-during training (it's how PPO explores); once we're done training, we want
-the policy's actual best guess, not exploration noise.
+The policy runs with deterministic=True. It then gives the mean of its action
+distribution. The random part of an action helps the policy to explore during
+training. It is not useful after training.
 """
 
 from __future__ import annotations

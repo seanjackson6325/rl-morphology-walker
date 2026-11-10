@@ -1,18 +1,14 @@
-"""Does conditioning on morphology actually help? The morphology-lottery test.
+"""Compares two policies on the same random bodies.
 
     python morph_eval.py --bodies 30
 
-Samples random bodies and runs each one under two policies:
+  SPECIALIST  a policy trained on one fixed body. It reads the body values but
+              never saw them change, so it holds one gait.
+  LOTTERY     a policy trained with --randomize, a new body each episode.
 
-  SPECIALIST  - trained on a single fixed body (warmstart_morph36.zip). It receives the
-                morphology inputs but never saw them vary, so it is the control: one gait,
-                applied to every body.
-  LOTTERY     - trained with --randomize, a new body every episode. If the premise holds it
-                should degrade more gracefully as bodies move away from the trained one.
-
-Both get the SAME bodies (same seed), so the comparison is paired. Reported against two
-things that should matter: total leg length, and leg-length MISMATCH between the two legs,
-which is the case the project set out to handle.
+Both policies get the same bodies from the same seed, so the test is paired. The
+report splits the bodies by leg mismatch, the difference between the length of the
+left leg and the length of the right leg.
 """
 
 from __future__ import annotations

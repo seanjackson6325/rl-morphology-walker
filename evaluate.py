@@ -1,25 +1,22 @@
-"""Gait evaluation for the 3D walker. One script, all the metrics that mattered.
+"""Measures the gait of one trained policy.
 
-    python evaluate.py models/BEST_walk3d_bothknee_v5_33M.zip [--episodes 10]
+    python evaluate.py models/warmstart_morph36.zip [--episodes 10]
 
-Every metric here exists because a simpler one lied at some point:
+Each measurement here exists because a simpler one gave a wrong answer:
 
-* ALWAYS many random-start episodes, never a fixed seed -- an 8-episode random eval once
-  revealed 25% falls that a 3-seed eval had hidden.
-* reward/step, not ep_rew: total reward rewards SURVIVING. Two runs sat at ep_len ~900
-  looking like the best in the project while merely squatting in place; reward/step put
-  them at 2.31 against the ~2.4 posture-only floor, versus 5.77 for a real walker.
-* stride length (distance per support-leg switch), not distance: a policy that minced at
-  4.6 steps/s covered 9.3 m per episode and looked fine, while the user watching it
-  correctly said "barely walking".
-* joint oscillation (mean |dq| per step in steady state), NOT max-min span: a span metric
-  captures the one-off release of the crouch start and reports a dead-straight knee as
-  "moving 1.1 rad".
-* torso roll with BOTH the startup transient AND the final 25 steps dropped: every failing
-  episode ends in a topple, so whole-episode peak-to-peak measures the fall, not the gait.
+  * Many random starts, never one fixed seed. A test with three fixed seeds hid a
+    25 percent fall rate.
+  * Reward per step, not total reward. Total reward pays for survival, so a policy
+    that squats in one place scores well. The floor for posture alone is about 2.4.
+  * Step length, not distance. A policy with very short fast steps covers ground
+    and still walks badly.
+  * Joint movement per step, not the largest angle minus the smallest. The second
+    reads the start pose, and reports a straight knee as a moving one.
+  * Torso roll without the first and last part of the episode. Every failed episode
+    ends in a fall, so a full-episode average measures the fall.
 
-IMPORTANT: a policy must be evaluated on the geometry it TRAINED on. Mismatched geometry
-makes a good policy look broken; that has fooled us three separate times. See BEST_README.txt.
+A policy must run on the body it trained on. The wrong body makes a good policy
+look broken.
 """
 
 from __future__ import annotations
@@ -84,8 +81,8 @@ def evaluate(model_path: str, n_episodes: int = 10, max_steps: int = 1000) -> di
     print(f"  episode length  {steps.mean():.0f} +- {steps.std():.0f} steps ({steps.mean()*0.025:.1f} s)")
     print(f"  distance        {g('dist'):.2f} m      speed {g('speed'):.2f} m/s")
     print(f"  stride          {g('stride'):.2f} m/step   cadence {g('cadence'):.1f} steps/s")
-    print(f"  reward/step     {g('reward_per_step'):.2f}   (posture-only floor is ~2.4 -- at or below it, it is not walking)")
-    print(f"  knee symmetry   {g('knee_ratio'):.2f}   (1.0 = both knees used equally; 0.1 = one leg dragged)")
+    print(f"  reward/step     {g('reward_per_step'):.2f}   (posture alone pays about 2.4; at or below that it is not walking)")
+    print(f"  knee symmetry   {g('knee_ratio'):.2f}   (1.0 means both knees work equally, 0.1 means one leg is dragged)")
     print(f"  torso roll      {g('roll'):.1f} deg p-p, steady state")
     return dict(episodes=eps, falls=falls)
 

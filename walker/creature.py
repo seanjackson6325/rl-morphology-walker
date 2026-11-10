@@ -1,23 +1,10 @@
-"""Builds a pymunk biped from a Morphology spec: torso + two legs (thigh+shin),
-each leg actuated at the hip and knee by a motor constraint.
+"""Builds a 2D creature with pymunk from a Morphology spec.
 
-Joint actuation model
-----------------------
-Each actuated joint is a `pymunk.SimpleMotor`, which drives the *relative
-angular velocity* between two bodies, capped by a maximum torque
-(`max_force`). This mirrors how a real servo/DC motor behaves: it chases a
-target speed but can only supply so much torque while doing it. The RL
-action for a joint sets the target speed; physics (gravity, contact forces,
-the other joints) determines whether the motor can actually reach it.
+The body is a torso and two legs. Each leg has a thigh and a shin. A motor drives
+the hip and the knee of each leg.
 
-Self-collision
----------------
-A creature's own limbs must not collide with each other (a thigh swinging
-into the torso shouldn't bounce off it) but every creature must still collide
-with the ground. pymunk handles this via `ShapeFilter` groups: shapes that
-share a nonzero group id never collide with each other, regardless of
-anything else. Every shape belonging to one creature gets the same group id;
-the ground keeps the default group (0), so it still collides with everyone.
+A motor holds a target speed, not a target angle. The controller therefore sets a
+joint speed, and the motor applies the torque that it needs, up to its limit.
 """
 
 from __future__ import annotations
@@ -39,7 +26,7 @@ GROUND_FRICTION = 1.0
 # Feet: a horizontal segment rigidly attached to the bottom of each shin, so
 # the lower leg is L-shaped. Without this the leg ends in a knife-edge (the
 # bottom of a thin vertical box) and the creature is an inverted pendulum on a
-# point -- it has NO base of support and is mathematically required to topple.
+# point. It has no base of support, so it must topple.
 # The foot extends mostly forward (toe) with a small heel, giving a footprint
 # the creature can balance and push off from.
 FOOT_FORWARD = 0.16        # m, toe extent in +x (walking direction)
@@ -83,7 +70,7 @@ class Creature:
 
     @property
     def motors(self) -> list[pymunk.SimpleMotor]:
-        """Order: [hip_L, knee_L, hip_R, knee_R] -- this fixes the action vector layout."""
+        """Order: hip_L, knee_L, hip_R, knee_R. This sets the action vector layout."""
         return [self.left.hip_motor, self.left.knee_motor, self.right.hip_motor, self.right.knee_motor]
 
     def foot_contact(self, leg: Leg, ground_shape: pymunk.Shape) -> bool:

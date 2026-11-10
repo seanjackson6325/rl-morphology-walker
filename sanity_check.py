@@ -1,10 +1,9 @@
-"""Visual sanity check for the creature rig: build one fixed-morphology biped,
-drop it on the ground with all motors idle, and watch what happens.
+"""Checks the 2D creature rig.
 
-No RL involved yet -- this is purely "did I wire the joints/motors/collision
-filters correctly", before any learning enters the picture. A correct rig
-should settle into a standing (or gently toppling) pose under gravity, not
-explode, clip through the floor, or fly off to infinity.
+Builds one body, drops it under gravity and leaves the motors idle. There is no
+learning here. The test shows whether the joints, the motors and the collision
+filters are correct. A correct rig stands, or falls slowly. A wrong rig flies
+apart, or falls through the floor.
 """
 
 from __future__ import annotations

@@ -1,14 +1,13 @@
-"""Make the figures for README.md. Writes PNG files to docs/img/.
+"""Writes the images for README.md and docs/paper.md into docs/img/.
 
     python make_figures.py
 
-Two kinds of figure:
-  * MuJoCo renders  - the body, a set of random bodies, and a gait filmstrip.
-  * Charts          - the results and the training curves.
+Two kinds of figure: MuJoCo renders of the bodies and the gait, and charts of the
+results and the training runs.
 
-Chart colours are categorical slots 1 and 2 of the reference palette
-(blue #2a78d6, orange #eb6834). Every bar is also direct-labelled, so the
-reader never needs the colour to identify a series.
+The model file in walker/mjcf.py has no lights and no materials, because training
+does not need them. A render of it is almost black. render_xml() adds a light, a
+floor texture and a colour for the figures only.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ W, H = 640, 480
 
 
 def style(ax):
-    """Recessive axes and grid; data is the only loud thing on the page."""
+    """Light axes and grid, so the data stands out."""
     ax.set_facecolor(SURFACE)
     ax.figure.set_facecolor(SURFACE)
     for side in ("top", "right"):
@@ -67,8 +66,8 @@ VISUAL = """
 
 
 def render_xml(morph):
-    """The training XML has no lights or materials -- it never needed them. Add them
-    for the figures only, so the creature is visible against a light floor."""
+    """Adds a light, a floor texture and a colour. The training file has none of
+    these, so a render of it is almost black."""
     xml = MJ.build_mjcf(morph)
     xml = xml.replace('<mujoco model="biped">', '<mujoco model="biped">' + VISUAL)
     xml = xml.replace('density="', 'rgba="0.27 0.40 0.57 1" density="')
@@ -93,7 +92,7 @@ def render(model, data, dist=2.7, azim=90, elev=-7, look=(0, 0, 0.74)):
 
 
 def pose(morph, crouch=True):
-    """Build a body and put it in the episode-start stance, feet on the floor."""
+    """Builds a body and sets the start pose, with the feet on the floor."""
     import walker.env3d as E
     model = mujoco.MjModel.from_xml_string(render_xml(morph))
     data = mujoco.MjData(model)
@@ -110,7 +109,7 @@ def pose(morph, crouch=True):
 
 
 def label(img, text):
-    """Caption strip under a render."""
+    """Adds a caption under a render."""
     fig, ax = plt.subplots(figsize=(W / 100, (H + 34) / 100), dpi=100)
     ax.imshow(img, extent=(0, W, 34, H + 34))
     ax.text(W / 2, 14, text, ha="center", va="center", color=INK2, fontsize=11)
@@ -120,7 +119,7 @@ def label(img, text):
     return fig
 
 
-# ---------------------------------------------------------------- 1. the body
+# 1. the body
 def fig_body():
     m, d = pose(MJ.fixed_morphology3d())
     side = render(m, d, azim=90)
@@ -139,7 +138,7 @@ def fig_body():
     print("body.png")
 
 
-# ------------------------------------------------------- 2. the joint diagram
+# 2. the joint diagram
 def fig_joints():
     f = MJ.fixed_morphology3d()
     th, sh = f.left.thigh_length, f.left.shin_length
@@ -183,7 +182,7 @@ def fig_joints():
     print("joints.png")
 
 
-# ---------------------------------------------------- 3. the random body set
+# 3. the random body set
 def fig_random_bodies():
     rng = np.random.default_rng(7)
     morphs = [MJ.fixed_morphology3d()] + [MJ.random_morphology3d(rng) for _ in range(5)]
@@ -206,7 +205,7 @@ def fig_random_bodies():
     print("random_bodies.png")
 
 
-# ------------------------------------------------------- 4. the gait filmstrip
+# 4. the gait filmstrip
 def fig_gait(model_path="models/warmstart_morph36.zip", n_frames=6, gap=13):
     from stable_baselines3 import PPO
     import walker.env3d as E
@@ -218,8 +217,8 @@ def fig_gait(model_path="models/warmstart_morph36.zip", n_frames=6, gap=13):
         obs, _, t, d, _ = env.step(a)
         if t or d:
             obs, _ = env.reset()
-    # The env's model has no lights. Build a lit copy of the SAME body and copy the
-    # state into it each frame -- identical geometry means an identical qpos layout.
+    # The environment model has no lights. Build a lit copy of the same body and copy the
+    # state into it each frame. The geometry matches, so the qpos layout matches.
     lit = mujoco.MjModel.from_xml_string(render_xml(env.morphology))
     lit_data = mujoco.MjData(lit)
     r = mujoco.Renderer(lit, H, W)
@@ -251,7 +250,7 @@ def fig_gait(model_path="models/warmstart_morph36.zip", n_frames=6, gap=13):
     print("gait.png")
 
 
-# ------------------------------------------------------------- 5. the results
+# 5. the results
 def fig_results():
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.6, 4.3), dpi=110,
                                    gridspec_kw={"width_ratios": [1, 1.15]})
@@ -293,14 +292,14 @@ def fig_results():
     print("results.png")
 
 
-# ------------------------------------------------------ 6. the training curves
+# 6. the training curves
 def fig_training():
     from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
     import glob
 
     def smooth(y, k):
-        """Centred moving average. np.convolve(mode='same') pads with zeros, which
-        drags the first and last k/2 points toward zero -- a fake crash at each end."""
+        """Moving average. np.convolve with mode same adds zeros at each end, which
+        pulls the first and last points down and shows a fall that did not happen."""
         if k < 2 or len(y) < k:
             return y
         pad = k // 2
@@ -348,6 +347,80 @@ def fig_training():
     print("training.png")
 
 
+# 7. the AT-ST body (historical)
+# This body is no longer in walker/mjcf.py. The plain tall box replaced it in
+# June 2026. It is built here again for the paper.
+ATST_THICK, ATST_LEN, ATST_WIDE = 0.26, 0.38, 0.34
+ATST_HIP, ATST_RADIUS, ATST_SEG = 0.26, 0.07, 0.40
+
+
+def atst_xml():
+    hz = -ATST_THICK / 2
+    body = f'{ATST_LEN / 2} {ATST_WIDE / 2} {ATST_THICK / 2}'
+
+    def leg(side, sign):
+        return f"""
+      <body name="{side}_thigh" pos="0 {sign * ATST_HIP / 2} {hz}">
+        <joint name="{side}_hip" type="hinge" axis="0 1 0" range="-1.4 1.4"/>
+        <geom type="capsule" fromto="0 0 0 0 0 {-ATST_SEG}" size="{ATST_RADIUS}" density="900"/>
+        <body name="{side}_shin" pos="0 0 {-ATST_SEG}">
+          <joint name="{side}_knee" type="hinge" axis="0 1 0" range="-2.4 0"/>
+          <geom type="capsule" fromto="0 0 0 0 0 {-ATST_SEG}" size="{ATST_RADIUS}" density="900"/>
+          <body name="{side}_foot" pos="0 0 {-ATST_SEG}">
+            <joint name="{side}_ankle" type="hinge" axis="0 1 0" range="-0.8 0.8"/>
+            <geom type="box" pos="0.05 0 -0.025" size="0.11 0.07 0.025" density="900"/>
+          </body>
+        </body>
+      </body>"""
+
+    return f"""<mujoco model="atst">
+  <compiler angle="radian"/>
+  <option timestep="0.005" gravity="0 0 -9.81"/>
+  {VISUAL}
+  <default>
+    <geom rgba="0.27 0.40 0.57 1" contype="2" conaffinity="1" friction="1 .1 .1"/>
+  </default>
+  <worldbody>
+    <light pos="1.5 -2.5 4" dir="-0.3 0.5 -1" directional="true" diffuse="0.55 0.55 0.55"/>
+    <geom name="floor" material="gridmat" rgba="1 1 1 1" type="plane" size="50 50 .1"
+          contype="1" conaffinity="1"/>
+    <body name="torso" pos="0 0 0.95">
+      <freejoint/>
+      <geom type="box" size="{body}" density="400"/>
+      <geom type="box" pos="0 {ATST_WIDE / 2 + 0.03} 0.04" size="0.055 0.035 0.055" density="200"/>
+      <geom type="box" pos="0 {-(ATST_WIDE / 2 + 0.03)} 0.04" size="0.055 0.035 0.055" density="200"/>
+      <geom type="box" pos="{ATST_LEN / 2 + 0.01} 0 0.035" size="0.02 0.115 0.04" density="200"/>
+      <geom type="box" pos="{ATST_LEN / 2 - 0.04} 0 -0.105" size="0.065 0.085 0.032" density="200"/>
+{leg('left', 1)}
+{leg('right', -1)}
+    </body>
+  </worldbody>
+</mujoco>"""
+
+
+def fig_atst():
+    m = mujoco.MjModel.from_xml_string(atst_xml())
+    d = mujoco.MjData(m)
+    d.qpos[7], d.qpos[8], d.qpos[9] = 0.55, -1.15, 0.55      # left hip, knee, ankle
+    d.qpos[10], d.qpos[11], d.qpos[12] = 0.55, -1.15, 0.55   # right
+    mujoco.mj_forward(m, d)
+    low = min(float(d.geom_xpos[g][2]) for g in range(m.ngeom) if m.geom_bodyid[g] != 0)
+    d.qpos[2] += 0.12 - low
+    mujoco.mj_forward(m, d)
+    views = [(72, -8), (90, -8), (20, -6)]
+    fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.0), dpi=110)
+    for ax, (az, el) in zip(axes, views):
+        ax.imshow(render(m, d, dist=1.95, azim=az, elev=el, look=(0, 0, 0.58)))
+        ax.axis("off")
+    fig.patch.set_facecolor(SURFACE)
+    fig.suptitle("The AT-ST body. A wide cockpit, sensor pods, a visor and backward knees.",
+                 color=INK, fontsize=13, y=0.99)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    fig.savefig(OUT / "atst.png", facecolor=SURFACE)
+    plt.close(fig)
+    print("atst.png")
+
+
 if __name__ == "__main__":
     fig_body()
     fig_joints()
@@ -355,3 +428,4 @@ if __name__ == "__main__":
     fig_results()
     fig_training()
     fig_gait()
+    fig_atst()

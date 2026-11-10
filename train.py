@@ -1,12 +1,7 @@
-"""Train PPO on the creature walker.
+"""Trains PPO on the walker.
 
-Two modes, controlled by --randomize:
-  off (default for the first run): every episode uses the same fixed body.
-      This is the sanity-check training run -- if PPO can't learn to move a
-      single fixed body, randomizing morphology won't help.
-  on: every episode samples a new random body (walker.morphology.random_morphology),
-      and the policy must condition its behavior on the morphology features in
-      the observation. This is the actual "domain randomization" experiment.
+Use --randomize for a new random body each episode. The policy must then read the
+body values in its observation. Without the flag every episode uses the same body.
 """
 
 from __future__ import annotations

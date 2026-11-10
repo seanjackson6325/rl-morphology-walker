@@ -1,21 +1,15 @@
-"""Gymnasium environment for the 3D MuJoCo biped walker.
+"""Gymnasium environment for the 3D walker.
 
-The 3D successor to walker/env.py. The PPO/training code is unchanged -- this
-just swaps the physics backend (MuJoCo instead of pymunk) and grows the
-observation/action spaces.
+The 3D version of walker/env.py. The physics engine is MuJoCo. The training code
+is the same for both versions.
 
-What's new vs. the 2D env, and why
-----------------------------------
-* Action is 6-D now (hip pitch + hip roll + knee, per leg) instead of 4-D --
-  the hip ROLL axes are what let the policy balance laterally, the degree of
-  freedom 2D didn't have.
-* The reward adds a LATERAL drift penalty (|v_y|) and an uprightness term.
-  In 2D the creature was confined to the sagittal plane so it could only fall
-  forward/back; in 3D it can also fall sideways or veer off course, so we must
-  actively reward going straight and staying upright.
-* The morphology vector is ALWAYS in the observation (even for a fixed body),
-  so the observation size is constant (31) and one policy architecture serves
-  both the fixed-body and randomized-body experiments.
+Each hip has two joints. The pitch joint swings the leg. The roll joint moves the
+leg sideways. A 2D creature cannot fall sideways, so it does not need the roll
+joint.
+
+The body values are always in the observation, also for a fixed body. The
+observation size is therefore constant, and one network shape serves both
+experiments.
 """
 
 from __future__ import annotations
@@ -36,103 +30,59 @@ from walker.mjcf import (
     random_morphology3d,
 )
 
-FRAME_SKIP = 5          # physics steps per control step; control dt = 5 * 0.005 = 0.025 s (40 Hz)
+FRAME_SKIP = 5          # physics steps per control step -> 40 Hz control
 
-# Crouched "ready stance" start pose (radians). Standing from locked-straight
-# legs makes a stepping gait hard to discover (the only way to start moving is an
-# awkward break from full extension), which is why the straight-leg start
-# plateaued. A slight forward hip pitch + backward knee flex lowers the center of
-# mass and puts the legs where alternating steps are an easy local move -- a
-# standard trick for bipedal-locomotion RL. hip_pitch<0 tilts the thigh forward;
-# knee>0 flexes the shin backward; ~knee = 2*|hip_pitch| keeps the feet under the
-# torso so the start is balanced. NOTE: signs are for the BACKWARD-bending
-# (avian / AT-ST chicken-walker) knee, range [-2.4, 0]: knee flexes negative,
-# thigh tilts back, shin swings forward to keep the foot under the torso.
+# Start pose, in radians. A start from straight legs makes a step hard to find.
+# A small bend puts the legs where a step is an easy change. The signs are for
+# the backward knee: the knee angle is negative when the knee bends.
 HIP_PITCH_CROUCH = 0.5
-KNEE_CROUCH = -1.0   # deeper bend to start near the bent-knee target height (long legs)
-ANKLE_CROUCH = 0.4   # tilt the foot flat to the ground at the start (bent knee tilts the shin, so
-                     # ankle=0 leaves the foot toe-up and it stubs/stumbles on the first step)
+KNEE_CROUCH = -1.0
+ANKLE_CROUCH = 0.4      # hold the foot flat, or it catches on the first step
 
-FORWARD_WEIGHT = 2.5    # strong: bentleg_v1 stood still in a squat (0.1m); make forward progress clearly worth it
+FORWARD_WEIGHT = 2.5
 ALIVE_BONUS = 0.15
 CTRL_COST = 0.001
-LATERAL_WEIGHT = 0.3    # penalize sideways velocity
-LATERAL_POS_WEIGHT = 0.5  # penalize sideways POSITION drift (|y|)
-HEADING_WEIGHT = 0.6    # reward facing +x; moderate (the 1.2 in v18 helped yaw but contributed to instability)
-UPRIGHT_WEIGHT = 0.9    # strong: the tall body was reclining back to walk on stiff legs + ankles
-SMOOTH_WEIGHT = 0.01    # penalize abrupt action changes (anti-hobble); low so it doesn't suppress knee-stepping
+LATERAL_WEIGHT = 0.3       # sideways speed
+LATERAL_POS_WEIGHT = 0.5   # sideways drift
+HEADING_WEIGHT = 0.6       # face +x
+UPRIGHT_WEIGHT = 0.9
+SMOOTH_WEIGHT = 0.01       # large changes between two actions
 
-# Foot-clearance reward: pays the creature for lifting a swing foot off the
-# ground, which forces knee-bending steps instead of a stiff-legged waddle.
-# CRUCIAL: only paid during SINGLE SUPPORT (the other foot planted). An earlier
-# version rewarded every airborne foot independently, so a flight phase (both
-# feet up) earned DOUBLE clearance -- which is exactly what produced a peg-leg
-# hop (one locked straight support leg, hop, other leg lifted). Single-support
-# clearance + a flight penalty (below) instead reward true alternating steps.
-# NOTE: the foot-clearance + flight-penalty machinery below was all developed to
-# coax the HUMAN (forward-bending) knee out of degenerate gaits. The avian
-# (backward-bending, AT-ST) knee bends its knees naturally and learned best with
-# a SIMPLE reward (the original v1), so for the chicken walker these are disabled
-# (weights 0) -- they over-constrained it and made it fall fast. Restore them for
-# any future human-knee / morphology-lottery work.
-CLEARANCE_WEIGHT = 0.0  # a capable ankle can satisfy foot-lift without the knee; use KNEE_WEIGHT (below) instead
-KNEE_WEIGHT = 0.5       # reward bending the swing knee (weak lever on its own; real fix for bent knees is leg geometry)
-KNEE_CAP = 1.2          # rad, cap on rewarded knee flexion
-# Weakest-link BOTH-knees reward, replacing the old SUMMED bent-knee term. The sum let one
-# working knee collect half the term, so locking the other knee cost only ~5% of step reward
-# -- cheap against the stability and zero holding torque of a rigid strut leg, so the policy
-# rationally dragged one straight leg (measured: left knee 4.3 deg/step, right 0.46 deg/step).
-# min() over the legs makes a locked knee score ZERO instead of half.
-# Calibration: per-leg EMA of |dknee| measured 0.069 (working) vs 0.011 (locked) rad/step, so
-# CAP=0.05 saturates on a real gait (no payoff for jitter) while the limp scores 22% of max.
-# What this buys, measured on the limping policy: the old depth-based sum paid it 0.14/step of
-# a 0.36 max, leaving only 0.22/step of headroom for fixing the locked knee. The min form pays
-# 0.22 of a 1.00 max, leaving 0.78/step -- a 3.5x stronger gradient aimed at exactly the defect.
-# NOT an asymmetry penalty |usage_L - usage_R|: that is minimized perfectly by TWO locked knees.
-# Rate (|dknee|), not flexion depth: depth is farmable by a permanent deep bend (the v5
-# "walking on its knees" failure); cyclic rate is not.
-# 1.0 was measured too weak (bothknee_v1): at 1.0 the policy correctly computed that a fast
-# LIMP beats a symmetric walk -- forward alone pays 4.23/step at 1.69 m/s, so locking a knee
-# and keeping the speed won by ~0.58/step. At 2.5 a symmetric ~1.1 m/s walk wins by ~0.77/step
-# instead. Safe direction to push BECAUSE of the clip(vx,0,1) gate below: under 1.0 m/s the
-# term cuts itself off, so unlike lowering FORWARD_WEIGHT this cannot produce a squatter
-# (FORWARD_WEIGHT 1.0 is what gave the bentleg_v1/v2 squats at 0.1 m).
-# 2.5 fixed the knee symmetry (ratio 0.10 -> 0.98) but overshot: at 2.5 this term was 35% of all
-# reward (2.07 of 5.84/step), so the policy bought KNEE MOTION at the expense of TRAVEL -- stride
-# collapsed 0.64 -> 0.22 m and cadence doubled to 4.6 steps/s (mincing). Note the knees were NOT
-# low-amplitude: 50 deg per cycle, nearly the limper's 62 deg. The term pays for knee motion whether
-# or not it produces a stride. 1.6 sits above the ~1.4 break-even where a symmetric walk still beats
-# a fast limp, while returning priority to forward travel.
+# Foot clearance and the flight penalty were for the forward knee. The backward
+# knee bends without help and learns better without them, so both are off.
+CLEARANCE_WEIGHT = 0.0
+CLEARANCE_CAP = 0.12       # m
+CLEARANCE_SPEED_CAP = 1.0  # m/s
+FLIGHT_PENALTY = 1.0       # keep one foot down, or it bounds and falls
+
+KNEE_WEIGHT = 0.5          # bend the swing knee
+KNEE_CAP = 1.2             # rad
+
+# Pay for the WEAKER of the two knees, not for the sum. A sum lets one knee
+# collect half the term, and the creature then drags the other leg straight.
+# The term uses knee movement per step, not knee angle: a deep fixed bend would
+# also satisfy an angle. The speed gate below stops a creature that moves its
+# knees in one place.
+# The weight was 2.5 at first. The creature then took very short fast steps,
+# because short steps give high knee movement. 1.6 keeps both knees and gives
+# the forward term priority again.
 BOTHKNEE_WEIGHT = 1.6
-BOTHKNEE_CAP = 0.05        # rad/step of knee motion at which the term saturates
-BOTHKNEE_ALPHA = 1.0 / 20  # EMA time constant ~0.5 s ~ one gait cycle
-FLATFOOT_WEIGHT = 0.0   # disabled: the ankle range limit (mjcf, +0.4 max) mechanically prevents tiptoe now;
-                        # the reward version (0.4) over-constrained balance in v14
-CLEARANCE_CAP = 0.12    # m, target swing-foot lift height
-CLEARANCE_SPEED_CAP = 1.0  # m/s; clearance reward is scaled by clip(vx,0,this) so it only pays while moving
-FLIGHT_PENALTY = 1.0    # re-enabled: keeps >=1 foot down so it WALKS instead of bounding (bounding on the tall body fell in ~3s)
+BOTHKNEE_CAP = 0.05        # rad per step where the term stops to grow
+BOTHKNEE_ALPHA = 1.0 / 20  # average over about one step cycle
 
-# Stand-tall reward: without it, the foot-clearance reward + crouch start get
-# satisfied by a deep permanent knee-bend (walking on its knees), since nothing
-# else rewards height (the upright term only cares about torso ORIENTATION, not
-# how low it is). This pays full reward once the torso is near full standing
-# height and ramps to zero in a deep crouch, while still allowing the natural
-# slight knee bend of real walking (full reward kicks in at 0.85 of standing
-# height, not 1.0, so it isn't forced to lock its legs straight).
+FLATFOOT_WEIGHT = 0.0      # off: the ankle range already stops a tiptoe gait
+
+# Height reward. Without it the creature walks on its knees, because the upright
+# term reads the torso angle only, not the torso height. The target is a peak,
+# not a ramp: too tall also loses reward. A ramp let it stand on straight legs.
 STAND_WEIGHT = 0.8
-# PEAKED height target: full reward at STAND_TARGET_FRAC of the (straight-leg)
-# standing height, falling to zero STAND_TOL away in EITHER direction. Penalizing
-# "too tall" (not just "too low") is what forces the long legs to bend -- a plain
-# ramp let it stand tall on straight legs and collect full reward.
-STAND_TARGET_FRAC = 0.80   # raised from 0.72: a walkable knee bend (~55 deg) instead of a too-deep 86 deg squat
+STAND_TARGET_FRAC = 0.80
 STAND_TOL = 0.20
 
-FALL_HEIGHT_FRACTION = 0.6   # terminate if torso drops below this fraction of standing height (a deep kneel no longer counts as "alive")
-MIN_UPRIGHT = 0.6            # terminate if torso z-axis . world-up drops below this (~53 deg tilt) -- forbids the recline gait
+FALL_HEIGHT_FRACTION = 0.6   # stop below this part of the standing height
+MIN_UPRIGHT = 0.6            # stop above a tilt of about 53 degrees
 
-# observation layout (see _get_obs): height(1) + quat(4) + joint angles(8)
-# + torso lin/ang vel(6) + joint vels(6) + foot contacts(2) + morphology(6)
-N_JOINTS = 8  # hip pitch + hip roll + knee + ankle, per leg
+N_JOINTS = 8   # hip pitch, hip roll, knee and ankle, for each leg
 N_OBS = 1 + 4 + N_JOINTS + 6 + N_JOINTS + 2 + N_MORPHOLOGY_OBS
 
 
@@ -187,11 +137,10 @@ class CreatureWalker3DEnv(gym.Env):
         ]
 
     def _set_crouch_pose(self):
-        """Put the hinges in the crouched ready stance, then drop the torso so the
-        lower foot rests just on the ground (works for any morphology)."""
-        # qpos layout: [0:7] free joint, then 8 hinges in declaration order:
-        # left:  hip_pitch(7) hip_roll(8) knee(9) ankle(10)
-        # right: hip_pitch(11) hip_roll(12) knee(13) ankle(14)
+        """Set the start pose, then move the torso down until the lower foot touches
+        the ground. This works for any body."""
+        # qpos holds the free joint in 0 to 6, then the 8 hinges in order:
+        # left hip pitch 7, hip roll 8, knee 9, ankle 10; right 11 to 14.
         qpos = self.data.qpos
         qpos[7] = HIP_PITCH_CROUCH    # left hip pitch
         qpos[9] = KNEE_CROUCH         # left knee
@@ -209,12 +158,9 @@ class CreatureWalker3DEnv(gym.Env):
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
 
-        # Rebuild the model only when we actually need a new body: the first
-        # reset, or every reset under domain randomization. For a fixed body we
-        # reuse the same MjModel/MjData (just reset state in place) -- this is
-        # cheaper, and crucially keeps any attached viewer valid across episodes
-        # (the viewer binds to specific model/data objects; replacing them every
-        # episode is what made earlier playback freeze on episode 0).
+        # Build a new model only for a new body. A fixed body keeps its model and
+        # data. This is faster, and it keeps an open viewer valid: the viewer binds
+        # to one model object, and a new object each episode freezes the window.
         if self.model is None or self.randomize:
             self._build()
             if self.render_mode == "human" and self._viewer is not None:
@@ -226,14 +172,13 @@ class CreatureWalker3DEnv(gym.Env):
         # Start in a crouched ready stance (much easier to learn stepping from).
         self._set_crouch_pose()
         self._prev_action = np.zeros(N_JOINTS, dtype=np.float64)
-        # Per-leg knee-motion EMA for the weakest-link both-knees reward. Optimistic init
-        # (starts AT the cap, decays to the truth in ~1 s) keeps the term neutral at episode
-        # start; a zero init would dock the first ~40 steps of every episode and couple this
-        # term to episode length. Safe to pay early: ending an episode forfeits ~5.7/step.
+        # Knee movement, averaged per leg. It starts at the cap and falls to the true
+        # value in about 1 second. A start at zero would remove reward from the first
+        # 40 steps of each episode, and tie this term to the episode length.
         self._prev_knee = np.array([self.data.qpos[k] for k in self._knee_adr], dtype=np.float64)
         self._knee_ema = np.full(2, BOTHKNEE_CAP, dtype=np.float64)
 
-        # Small randomization of the start pose for robustness (standard practice).
+        # A small random change to the start pose.
         self.data.qpos[:] += self.np_random.uniform(-0.01, 0.01, size=self.model.nq)
         self.data.qvel[:] += self.np_random.uniform(-0.01, 0.01, size=self.model.nv)
         mujoco.mj_forward(self.model, self.data)
@@ -269,8 +214,8 @@ class CreatureWalker3DEnv(gym.Env):
         ctrl_term = -CTRL_COST * float(np.sum(np.square(action)))
         upright_term = UPRIGHT_WEIGHT * upright
 
-        # Foot contacts. Reward swing-foot clearance ONLY in single support (one
-        # foot planted); penalize flight (both feet off) so it walks, not hops.
+        # Pay for a lifted foot only when the other foot is down. Pay nothing when
+        # both feet are off the ground, or the creature hops.
         left_contact = self.data.sensordata[self._sensor_adr[0]] > 1.0
         right_contact = self.data.sensordata[self._sensor_adr[1]] > 1.0
 
@@ -282,38 +227,31 @@ class CreatureWalker3DEnv(gym.Env):
             clearance = _clear(self._foot_geom_ids[1])
         elif right_contact and not left_contact:     # left leg swinging
             clearance = _clear(self._foot_geom_ids[0])
-        # Gate clearance by forward speed so lifting a foot only pays while
-        # actually traveling -- otherwise the policy farms it by marching in
-        # place (v7's failure: ~0.9m in 25s while waving one leg).
+        # A lifted foot pays only while the creature moves forward.
         clearance_term = CLEARANCE_WEIGHT * clearance * float(np.clip(vx, 0.0, CLEARANCE_SPEED_CAP))
         flight_term = -FLIGHT_PENALTY if (not left_contact and not right_contact) else 0.0
 
-        # Reward bending the SWING leg's knee (avian knee: more negative = more bent),
-        # so it steps with its knees instead of stiff legs + ankle.
+        # Bend the knee of the swing leg. A negative angle is a bent knee.
         knee_bend = 0.0
         if left_contact and not right_contact:       # right leg swinging
             knee_bend = max(0.0, -float(self.data.qpos[self._knee_adr[1]]))
         elif right_contact and not left_contact:      # left leg swinging
             knee_bend = max(0.0, -float(self.data.qpos[self._knee_adr[0]]))
-        # Gate by forward speed so bending a knee only pays WHILE moving forward
-        # -- otherwise the policy farms it by stepping in place (v10: ~0.26 m/s).
+        # Again, only while the creature moves forward.
         knee_term = KNEE_WEIGHT * min(knee_bend, KNEE_CAP) * float(np.clip(vx, 0.0, 1.0))
 
-        # Continuous bent-knee posture reward on BOTH knees (avian: bent = negative).
-        # Instantaneous min(flexion_L, flexion_R) would be WRONG -- in a healthy gait the
-        # stance knee is extended while the swing knee is flexed, so the instantaneous min is
-        # near zero for CORRECT walking. The EMA over ~one gait cycle asks the right question:
-        # "is this knee being used cyclically?" -- then pay for the WORSE leg.
+        # Pay for the knee that moves less. A single reading of the two knee angles
+        # would be wrong: in a correct gait one knee is straight while the other bends,
+        # so the smaller of the two is near zero. The average over one step cycle
+        # answers the useful question instead: does this knee work at all?
         knee_now = np.array([self.data.qpos[k] for k in self._knee_adr], dtype=np.float64)
         self._knee_ema = (1.0 - BOTHKNEE_ALPHA) * self._knee_ema + BOTHKNEE_ALPHA * np.abs(knee_now - self._prev_knee)
         self._prev_knee = knee_now
         bothknee = float(np.min(np.clip(self._knee_ema, 0.0, BOTHKNEE_CAP))) / BOTHKNEE_CAP
-        # vx-gated like the other gait terms, or the policy farms knee motion standing still
-        # (the v7/v10 march-in-place failure).
+        # The speed gate stops a creature that moves its knees in one place.
         bothknee_term = BOTHKNEE_WEIGHT * bothknee * float(np.clip(vx, 0.0, 1.0))
 
-        # Flat-foot reward: reward a PLANTED foot for being flat (its up-axis
-        # vertical, xmat[2,2]~1). Discourages the tiptoe/toe-point gait.
+        # Pay a foot on the ground for a flat angle. This stops a tiptoe gait.
         flatfoot = 0.0
         if left_contact:
             flatfoot += float(self.data.xmat[self._foot_body_ids[0]].reshape(3, 3)[2, 2])
@@ -370,16 +308,14 @@ class CreatureWalker3DEnv(gym.Env):
                 self._viewer.cam.azimuth = 90      # side-on view of the sagittal (forward) gait
                 self._viewer.cam.elevation = -12
 
-        # Pan the camera to follow the torso so the walker stays centered as it
-        # moves forward instead of striding out of frame.
+        # Follow the torso, or the creature walks out of the frame.
         with self._viewer.lock():
             self._viewer.cam.lookat[0] = float(self.data.xpos[self._torso_id][0])
             self._viewer.cam.lookat[1] = float(self.data.xpos[self._torso_id][1])
             self._viewer.cam.lookat[2] = 0.8
 
         self._viewer.sync()
-        # Pace playback to roughly real time so the gait is watchable (render is
-        # only ever called for render_mode="human", never during training).
+        # Run at about real time. This runs for playback only, never in training.
         time.sleep(FRAME_SKIP * self.model.opt.timestep)
 
     def close(self):

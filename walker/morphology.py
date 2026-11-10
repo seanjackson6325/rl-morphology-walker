@@ -19,7 +19,7 @@ LIMB_WIDTH = 0.08                       # m, fixed for simplicity
 # "Areal" density (kg/m^2, since this is 2D). Kept low enough that the joint
 # motors (HIP_TORQUE/KNEE_TORQUE in creature.py) can comfortably lift and swing
 # a leg: at the old 300-900 range a single ~19 kg segment needed ~37 N*m just
-# to hold horizontal, exceeding the motor's torque -- the creature literally
+# to hold horizontal, exceeding the motor's torque. the creature literally
 # could not pick up its own leg.
 DENSITY_RANGE = (80.0, 160.0)           # kg/m^2
 

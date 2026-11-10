@@ -240,8 +240,6 @@ design and the failures during development.
 
 [Read the paper](docs/paper.md)
 
-Note: the paper is not written yet. This link does not work at present.
-
 ## 7. Limitations
 
 - The random-body policy walks a full episode on 7 of 24 new bodies. It falls on the other 17.
